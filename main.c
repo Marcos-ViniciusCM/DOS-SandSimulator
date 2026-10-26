@@ -1,186 +1,164 @@
 #include <stdio.h>
 #include <dos.h>
-#include <i86.h> 
+#include <i86.h>
 #include <conio.h>
 #include <stdlib.h>
-#include <math.h> 
+#include <math.h>
 #include <string.h>
 #include <time.h>
 
-
-#define SCREEN_WIDTH  320
-#define SET_MODE            0x00 
-#define VIDEO_INT           0x10
+#define SCREEN_WIDTH 320
+#define SET_MODE 0x00
+#define VIDEO_INT 0x10
 #define SCREEN_HEIGTH 200
-#define VGA_256_COLOR_MODE  0x13 
-#define TEXT_MODE     0x03
+#define VGA_256_COLOR_MODE 0x13
+#define TEXT_MODE 0x03
 
- typedef unsigned char bytePerson;
+typedef unsigned char bytePerson;
 
 unsigned char __far *VGA = (unsigned char __far *)0xA0000000L;
 
+// 320x200
 
-//cada grid vai ter 4 pixel entao fica 80x50
-unsigned int tabuleiro[4000] = {0};
+unsigned char tabuleiroVisual[64000] = {0};
 
-//proximo e oque vai ser printado na tela;
-unsigned int proximo[4000] = {0};
+unsigned int posicaoGraos[50000];
+unsigned int quantidadeGrao = 0;
 
-void defineMode(bytePerson mode){
-union REGS regs;
+unsigned int mouse_on = 0;
+unsigned int num_button = 0;
+
+void defineMode(bytePerson mode)
+{
+    union REGS regs;
     regs.h.ah = SET_MODE;
     regs.h.al = mode;
-    int86(VIDEO_INT,&regs,&regs);
+    int86(VIDEO_INT, &regs, &regs);
 }
 
-void voltaTexto(){
+void voltaTexto()
+{
     union REGS regs;
-    //voltar modo texto
-regs.h.ah = 0x00;
-regs.h.al = 0x3;
-int86(0x10,&regs,&regs);
+    // voltar modo texto
+    regs.h.ah = 0x00;
+    regs.h.al = 0x3;
+    int86(0x10, &regs, &regs);
 }
 
+unsigned int podeCair(int x, int y)
+{
+    unsigned int indexAtual = y * 320 + x;
 
-void desenhaPixel(int x,int y,bytePerson color){
-    //multiplica o y por 320 e soma o x e coloca a cor no offset
-    //y + 2
-    VGA[((y<<6) + (y<<8) )+x] = color;
-}
-
-
-//index pega a posicao atual no array que deve se comportar igual grid
-int getNeighbors(int x, int y) {
-    int index = (y*80) + x;
-    if (x <= 0 || x >= 79 || y <= 0 || y >= 49)
-        return 0;
-   
-    
-	
-   return tabuleiro[index - 80] + 
-           tabuleiro[index + 80] + 
-           tabuleiro[index - 1] + 
-           tabuleiro[index - 1 - 80] + 
-           tabuleiro[index - 1 + 80] + 
-           tabuleiro[index + 1] + 
-           tabuleiro[index + 1 + 80] + 
-           tabuleiro[index + 1 - 80];
-}
-
-void verificaVizinhos(int x, int y) {
-    int vizinhos = getNeighbors(x, y);
-    int index = (y*80) + x;
-//solidao
-    if (tabuleiro[index] == 1 && vizinhos < 2) {
-        proximo[index] = 0;
-    } 
-    
-    //sobrevivencia
-    if(tabuleiro[index] == 1 && (vizinhos == 2 || vizinhos == 3)){
-    	proximo[index] = 1;
-	}
-	
-	//superpolucao
-	if(tabuleiro[index] == 1 && vizinhos > 3){
-		proximo[index] = 0;
-	}
-	
-	//reproducao
-	if(tabuleiro[index] == 0 && vizinhos == 3){
-		proximo[index] = 1;
-	}
-
-    if(tabuleiro[index] == 0 && vizinhos != 3){
-        proximo[index] = 0;
+    if (y >= 199)
+        return indexAtual;
+    // cai para baixo
+    if (tabuleiroVisual[indexAtual + 320] == 0)
+    {
+        return indexAtual + 320;
     }
-    
-}
-
-
-void reiniciaArray(unsigned int *array){
-    memset(array, 0, 4000 * sizeof(unsigned int));
-}
-
-void atualizaTabuleiro(){
-    memcpy(tabuleiro, proximo, 4000 * sizeof(unsigned int));
-}
-void inicializaRando(){
-    int i;
-     srand(time(NULL));
-    for(i=0;i< 4000;i++){
-        tabuleiro[i] = rand() % 2;
+    // cai para direita
+    else if (x < 319 && tabuleiroVisual[indexAtual + 321] == 0)
+    {
+        return indexAtual + 321;
+    }
+    // cai para esquerda
+    else if (x > 0 && tabuleiroVisual[indexAtual + 319] == 0)
+    {
+        return indexAtual + 319;
+    }
+    else
+    {
+        return indexAtual;
     }
 }
 
- void copiaArrayParaTela(){
-    int index = 0 ;
-    int x,y = 0;
-    int i = 0;
-    int x1,y1=0;
-    int tela_x, tela_y;
-    int atual_y = 0;
-    int atual_x = 0;
-     for( ; i < 4000;i++){
-          if(i % 80 == 0 && i !=0){
-             y++;
-             x=0;
-          }
+void inicializarMouse()
+{
+    union REGS regs;
 
-          tela_x = x * 4;
-          tela_y = y * 4;
-       
-          for(x1 = 0 ; x1 < 4;x1++){
-            for(y1 = 0 ; y1 < 4 ; y1++){
-               int atual_y = tela_y + y1;
-                int atual_x = tela_x + x1;
-                VGA[(( (atual_y) <<6) + ( (atual_y)<<8) )+ atual_x  ] = proximo[i]; //PROXIMO
-            }
-          }
+    regs.x.ax = 0;
+    int86(0x33, &regs, &regs);
 
-          //VGA[((y<<6) + (y<<8) )+ x  ] = proximo[i]; 
-         x++;
-           
-     }
- }
+    mouse_on = regs.x.ax;
+    num_button = regs.x.bx;
 
-
-
-int main() {
-
-int x = 0;
-int y = 0;
-tabuleiro[82] = 1;
-tabuleiro[163] = 1;
-tabuleiro[241] = 1;
-tabuleiro[242] = 1;
-tabuleiro[243] = 1;
-
-   
-defineMode(VGA_256_COLOR_MODE);
-inicializaRando();
- 
-   while(!kbhit()){
-    int i;
-    y = 0;
-    x=0;   
-    for(i = 0; i < 4000;i++){
-         x++;
-         if(i % 80 == 0 && i !=0){
-            y++;
-            x=0;
-         }
-       
-        verificaVizinhos(x,y);   
+    if (mouse_on)
+    {
     }
-    
-    copiaArrayParaTela();
-    atualizaTabuleiro();
-    reiniciaArray(proximo);
-   }
+    else
+    {
+        printf("mouseErro");
+    }
+}
 
-getch();
+void CalculaLogicaApenasGrao()
+{
+    int x, y, i;
+    unsigned cai, offset;
+    for (i = 0; i < quantidadeGrao; i++)
+    {
+        // offset = ((y << 6) + (y << 8) + x);
+        offset = posicaoGraos[i];
+        y = offset / 320;
+        x = offset % 320;
+        cai = podeCair(x, y);
+        if (offset == cai)
+            continue;
+        tabuleiroVisual[offset] = 0;
+        posicaoGraos[i] = cai;
+        tabuleiroVisual[cai] = 1;
+        VGA[offset] = 0;
+        VGA[cai] = 14;
+    }
+}
 
+int main()
+{
+    union REGS regs;
 
+    int dx = 0;
+    int dy = 0;
+    int cx = 0;
+    unsigned int offset = 0;
+    unsigned int x = 0;
+    unsigned int y = 0;
+    int button = 0;
+    int cai = 0;
+    int px = 0;
+    int py = 0;
+
+    defineMode(VGA_256_COLOR_MODE);
+    inicializarMouse();
+
+    while (!button)
+    {
+        regs.x.ax = 3;
+        int86(0x33, &regs, &regs);
+        x = regs.x.cx; // 2
+        y = regs.x.dx;
+
+        if (quantidadeGrao > 50000)
+        {
+            break;
+        }
+
+        offset = (x >> 1) + ((y << 8) + (y << 6));
+        if (tabuleiroVisual[offset] == 0)
+        {
+            posicaoGraos[quantidadeGrao] = offset;
+            tabuleiroVisual[offset] = 14;
+            quantidadeGrao++;
+        }
+        // posição x vai de 0 a 639 entao tem que dividir por 2
+        // desenhaTela();
+        CalculaLogicaApenasGrao();
+        if (regs.x.bx & 1)
+        {
+            button = 1;
+        }
+    }
+
+    // getch();
 
     defineMode(TEXT_MODE);
     printf("Hello, World!\n");
